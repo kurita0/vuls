@@ -5,17 +5,18 @@ package oval
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
-	"github.com/future-architect/vuls/config"
+	"golang.org/x/xerrors"
+
 	"github.com/future-architect/vuls/constant"
 	"github.com/future-architect/vuls/logging"
 	"github.com/future-architect/vuls/models"
+	ovaldb "github.com/vulsio/goval-dictionary/db"
 	ovalmodels "github.com/vulsio/goval-dictionary/models"
 )
 
-// RedHatBase is the base struct for RedHat, CentOS, Alma and Rocky
+// RedHatBase is the base struct for RedHat, CentOS, Alma, Rocky and Fedora
 type RedHatBase struct {
 	Base
 }
@@ -23,23 +24,13 @@ type RedHatBase struct {
 // FillWithOval returns scan result after updating CVE info by OVAL
 func (o RedHatBase) FillWithOval(r *models.ScanResult) (nCVEs int, err error) {
 	var relatedDefs ovalResult
-	if o.Cnf.IsFetchViaHTTP() {
-		if relatedDefs, err = getDefsByPackNameViaHTTP(r, o.Cnf.GetURL()); err != nil {
-			return 0, err
+	if o.driver == nil {
+		if relatedDefs, err = getDefsByPackNameViaHTTP(r, o.baseURL); err != nil {
+			return 0, xerrors.Errorf("Failed to get Definitions via HTTP. err: %w", err)
 		}
 	} else {
-		driver, err := newOvalDB(o.Cnf)
-		if err != nil {
-			return 0, err
-		}
-		defer func() {
-			if err := driver.CloseDB(); err != nil {
-				logging.Log.Errorf("Failed to close DB. err: %+v", err)
-			}
-		}()
-
-		if relatedDefs, err = getDefsByPackNameFromOvalDB(driver, r); err != nil {
-			return 0, err
+		if relatedDefs, err = getDefsByPackNameFromOvalDB(r, o.driver); err != nil {
+			return 0, xerrors.Errorf("Failed to get Definitions from DB. err: %w", err)
 		}
 	}
 
@@ -57,6 +48,15 @@ func (o RedHatBase) FillWithOval(r *models.ScanResult) (nCVEs int, err error) {
 					vuln.CveContents[models.RedHat][i] = cont
 				}
 			}
+		case models.Fedora:
+			for _, d := range vuln.DistroAdvisories {
+				if conts, ok := vuln.CveContents[models.Fedora]; ok {
+					for i, cont := range conts {
+						cont.SourceLink = "https://bodhi.fedoraproject.org/updates/" + d.AdvisoryID
+						vuln.CveContents[models.Fedora][i] = cont
+					}
+				}
+			}
 		case models.Oracle:
 			if conts, ok := vuln.CveContents[models.Oracle]; ok {
 				for i, cont := range conts {
@@ -68,7 +68,9 @@ func (o RedHatBase) FillWithOval(r *models.ScanResult) (nCVEs int, err error) {
 			for _, d := range vuln.DistroAdvisories {
 				if conts, ok := vuln.CveContents[models.Amazon]; ok {
 					for i, cont := range conts {
-						if strings.HasPrefix(d.AdvisoryID, "ALAS2-") {
+						if strings.HasPrefix(d.AdvisoryID, "ALAS2022-") {
+							cont.SourceLink = fmt.Sprintf("https://alas.aws.amazon.com/AL2022/%s.html", strings.ReplaceAll(d.AdvisoryID, "ALAS2022", "ALAS"))
+						} else if strings.HasPrefix(d.AdvisoryID, "ALAS2-") {
 							cont.SourceLink = fmt.Sprintf("https://alas.aws.amazon.com/AL2/%s.html", strings.ReplaceAll(d.AdvisoryID, "ALAS2", "ALAS"))
 						} else if strings.HasPrefix(d.AdvisoryID, "ALAS-") {
 							cont.SourceLink = fmt.Sprintf("https://alas.aws.amazon.com/%s.html", d.AdvisoryID)
@@ -214,8 +216,8 @@ func (o RedHatBase) convertToModel(cveID string, def *ovalmodels.Definition) *mo
 			continue
 		}
 
-		score2, vec2 := o.parseCvss2(cve.Cvss2)
-		score3, vec3 := o.parseCvss3(cve.Cvss3)
+		score2, vec2 := parseCvss2(cve.Cvss2)
+		score3, vec3 := parseCvss3(cve.Cvss3)
 
 		sev2, sev3, severity := "", "", def.Advisory.Severity
 		if cve.Impact != "" {
@@ -251,51 +253,19 @@ func (o RedHatBase) convertToModel(cveID string, def *ovalmodels.Definition) *mo
 	return nil
 }
 
-// ParseCvss2 divide CVSSv2 string into score and vector
-// 5/AV:N/AC:L/Au:N/C:N/I:N/A:P
-func (o RedHatBase) parseCvss2(scoreVector string) (score float64, vector string) {
-	var err error
-	ss := strings.Split(scoreVector, "/")
-	if 1 < len(ss) {
-		if score, err = strconv.ParseFloat(ss[0], 64); err != nil {
-			return 0, ""
-		}
-		return score, strings.Join(ss[1:], "/")
-	}
-	return 0, ""
-}
-
-// ParseCvss3 divide CVSSv3 string into score and vector
-// 5.6/CVSS:3.0/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:L
-func (o RedHatBase) parseCvss3(scoreVector string) (score float64, vector string) {
-	var err error
-	for _, s := range []string{
-		"/CVSS:3.0/",
-		"/CVSS:3.1/",
-	} {
-		ss := strings.Split(scoreVector, s)
-		if 1 < len(ss) {
-			if score, err = strconv.ParseFloat(ss[0], 64); err != nil {
-				return 0, ""
-			}
-			return score, strings.TrimPrefix(s, "/") + ss[1]
-		}
-	}
-	return 0, ""
-}
-
 // RedHat is the interface for RedhatBase OVAL
 type RedHat struct {
 	RedHatBase
 }
 
 // NewRedhat creates OVAL client for Redhat
-func NewRedhat(cnf config.VulnDictInterface) RedHat {
+func NewRedhat(driver ovaldb.DB, baseURL string) RedHat {
 	return RedHat{
 		RedHatBase{
 			Base{
-				family: constant.RedHat,
-				Cnf:    cnf,
+				driver:  driver,
+				baseURL: baseURL,
+				family:  constant.RedHat,
 			},
 		},
 	}
@@ -307,12 +277,13 @@ type CentOS struct {
 }
 
 // NewCentOS creates OVAL client for CentOS
-func NewCentOS(cnf config.VulnDictInterface) CentOS {
+func NewCentOS(driver ovaldb.DB, baseURL string) CentOS {
 	return CentOS{
 		RedHatBase{
 			Base{
-				family: constant.CentOS,
-				Cnf:    cnf,
+				driver:  driver,
+				baseURL: baseURL,
+				family:  constant.CentOS,
 			},
 		},
 	}
@@ -324,12 +295,13 @@ type Oracle struct {
 }
 
 // NewOracle creates OVAL client for Oracle
-func NewOracle(cnf config.VulnDictInterface) Oracle {
+func NewOracle(driver ovaldb.DB, baseURL string) Oracle {
 	return Oracle{
 		RedHatBase{
 			Base{
-				family: constant.Oracle,
-				Cnf:    cnf,
+				driver:  driver,
+				baseURL: baseURL,
+				family:  constant.Oracle,
 			},
 		},
 	}
@@ -342,12 +314,13 @@ type Amazon struct {
 }
 
 // NewAmazon creates OVAL client for Amazon Linux
-func NewAmazon(cnf config.VulnDictInterface) Amazon {
+func NewAmazon(driver ovaldb.DB, baseURL string) Amazon {
 	return Amazon{
 		RedHatBase{
 			Base{
-				family: constant.Amazon,
-				Cnf:    cnf,
+				driver:  driver,
+				baseURL: baseURL,
+				family:  constant.Amazon,
 			},
 		},
 	}
@@ -360,12 +333,13 @@ type Alma struct {
 }
 
 // NewAlma creates OVAL client for Alma Linux
-func NewAlma(cnf config.VulnDictInterface) Alma {
+func NewAlma(driver ovaldb.DB, baseURL string) Alma {
 	return Alma{
 		RedHatBase{
 			Base{
-				family: constant.Alma,
-				Cnf:    cnf,
+				driver:  driver,
+				baseURL: baseURL,
+				family:  constant.Alma,
 			},
 		},
 	}
@@ -378,12 +352,32 @@ type Rocky struct {
 }
 
 // NewRocky creates OVAL client for Rocky Linux
-func NewRocky(cnf config.VulnDictInterface) Rocky {
+func NewRocky(driver ovaldb.DB, baseURL string) Rocky {
 	return Rocky{
 		RedHatBase{
 			Base{
-				family: constant.Rocky,
-				Cnf:    cnf,
+				driver:  driver,
+				baseURL: baseURL,
+				family:  constant.Rocky,
+			},
+		},
+	}
+}
+
+// Fedora is the interface for RedhatBase OVAL
+type Fedora struct {
+	// Base
+	RedHatBase
+}
+
+// NewFedora creates OVAL client for Fedora Linux
+func NewFedora(driver ovaldb.DB, baseURL string) Fedora {
+	return Fedora{
+		RedHatBase{
+			Base{
+				driver:  driver,
+				baseURL: baseURL,
+				family:  constant.Fedora,
 			},
 		},
 	}

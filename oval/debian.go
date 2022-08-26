@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/future-architect/vuls/config"
+	"golang.org/x/xerrors"
+
 	"github.com/future-architect/vuls/constant"
 	"github.com/future-architect/vuls/logging"
 	"github.com/future-architect/vuls/models"
 	"github.com/future-architect/vuls/util"
+	ovaldb "github.com/vulsio/goval-dictionary/db"
 	ovalmodels "github.com/vulsio/goval-dictionary/models"
 )
 
@@ -122,12 +124,13 @@ type Debian struct {
 }
 
 // NewDebian creates OVAL client for Debian
-func NewDebian(cnf config.VulnDictInterface) Debian {
+func NewDebian(driver ovaldb.DB, baseURL string) Debian {
 	return Debian{
 		DebianBase{
 			Base{
-				family: constant.Debian,
-				Cnf:    cnf,
+				driver:  driver,
+				baseURL: baseURL,
+				family:  constant.Debian,
 			},
 		},
 	}
@@ -141,35 +144,29 @@ func (o Debian) FillWithOval(r *models.ScanResult) (nCVEs int, err error) {
 
 	// Add linux and set the version of running kernel to search OVAL.
 	if r.Container.ContainerID == "" {
-		newVer := ""
-		if p, ok := r.Packages[linuxImage]; ok {
-			newVer = p.NewVersion
-		}
-		r.Packages["linux"] = models.Package{
-			Name:       "linux",
-			Version:    r.RunningKernel.Version,
-			NewVersion: newVer,
+		if r.RunningKernel.Version != "" {
+			newVer := ""
+			if p, ok := r.Packages[linuxImage]; ok {
+				newVer = p.NewVersion
+			}
+			r.Packages["linux"] = models.Package{
+				Name:       "linux",
+				Version:    r.RunningKernel.Version,
+				NewVersion: newVer,
+			}
+		} else {
+			logging.Log.Warnf("Since the exact kernel version is not available, the vulnerability in the linux package is not detected.")
 		}
 	}
 
 	var relatedDefs ovalResult
-	if o.Cnf.IsFetchViaHTTP() {
-		if relatedDefs, err = getDefsByPackNameViaHTTP(r, o.Cnf.GetURL()); err != nil {
-			return 0, err
+	if o.driver == nil {
+		if relatedDefs, err = getDefsByPackNameViaHTTP(r, o.baseURL); err != nil {
+			return 0, xerrors.Errorf("Failed to get Definitions via HTTP. err: %w", err)
 		}
 	} else {
-		driver, err := newOvalDB(o.Cnf)
-		if err != nil {
-			return 0, err
-		}
-		defer func() {
-			if err := driver.CloseDB(); err != nil {
-				logging.Log.Errorf("Failed to close DB. err: %+v", err)
-			}
-		}()
-
-		if relatedDefs, err = getDefsByPackNameFromOvalDB(driver, r); err != nil {
-			return 0, err
+		if relatedDefs, err = getDefsByPackNameFromOvalDB(r, o.driver); err != nil {
+			return 0, xerrors.Errorf("Failed to get Definitions from DB. err: %w", err)
 		}
 	}
 
@@ -209,12 +206,13 @@ type Ubuntu struct {
 }
 
 // NewUbuntu creates OVAL client for Debian
-func NewUbuntu(cnf config.VulnDictInterface) Ubuntu {
+func NewUbuntu(driver ovaldb.DB, baseURL string) Ubuntu {
 	return Ubuntu{
 		DebianBase{
 			Base{
-				family: constant.Ubuntu,
-				Cnf:    cnf,
+				driver:  driver,
+				baseURL: baseURL,
+				family:  constant.Ubuntu,
 			},
 		},
 	}
@@ -397,6 +395,35 @@ func (o Ubuntu) FillWithOval(r *models.ScanResult) (nCVEs int, err error) {
 			"linux-virtual",
 		}
 		return o.fillWithOval(r, kernelNamesInOval)
+	case "22":
+		kernelNamesInOval := []string{
+			"linux-aws",
+			"linux-azure",
+			"linux-gcp",
+			"linux-generic",
+			"linux-gke",
+			"linux-header-aws",
+			"linux-header-azure",
+			"linux-header-gcp",
+			"linux-header-generic",
+			"linux-header-gke",
+			"linux-header-oracle",
+			"linux-image-aws",
+			"linux-image-azure",
+			"linux-image-gcp",
+			"linux-image-generic",
+			"linux-image-gke",
+			"linux-image-oracle",
+			"linux-oracle",
+			"linux-tools-aws",
+			"linux-tools-azure",
+			"linux-tools-common",
+			"linux-tools-gcp",
+			"linux-tools-generic",
+			"linux-tools-gke",
+			"linux-tools-oracle",
+		}
+		return o.fillWithOval(r, kernelNamesInOval)
 	}
 	return 0, fmt.Errorf("Ubuntu %s is not support for now", r.Release)
 }
@@ -467,23 +494,13 @@ func (o Ubuntu) fillWithOval(r *models.ScanResult, kernelNamesInOval []string) (
 	}
 
 	var relatedDefs ovalResult
-	if o.Cnf.IsFetchViaHTTP() {
-		if relatedDefs, err = getDefsByPackNameViaHTTP(r, o.Cnf.GetURL()); err != nil {
-			return 0, err
+	if o.driver == nil {
+		if relatedDefs, err = getDefsByPackNameViaHTTP(r, o.baseURL); err != nil {
+			return 0, xerrors.Errorf("Failed to get Definitions via HTTP. err: %w", err)
 		}
 	} else {
-		driver, err := newOvalDB(o.Cnf)
-		if err != nil {
-			return 0, err
-		}
-		defer func() {
-			if err := driver.CloseDB(); err != nil {
-				logging.Log.Errorf("Failed to close DB. err: %+v", err)
-			}
-		}()
-
-		if relatedDefs, err = getDefsByPackNameFromOvalDB(driver, r); err != nil {
-			return 0, err
+		if relatedDefs, err = getDefsByPackNameFromOvalDB(r, o.driver); err != nil {
+			return 0, xerrors.Errorf("Failed to get Definitions from DB. err: %w", err)
 		}
 	}
 

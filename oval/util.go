@@ -5,25 +5,29 @@ package oval
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/cenkalti/backoff"
+	apkver "github.com/knqyf263/go-apk-version"
+	debver "github.com/knqyf263/go-deb-version"
+	rpmver "github.com/knqyf263/go-rpm-version"
+	"github.com/parnurzeal/gorequest"
+	"golang.org/x/xerrors"
+
 	"github.com/future-architect/vuls/config"
 	"github.com/future-architect/vuls/constant"
 	"github.com/future-architect/vuls/logging"
 	"github.com/future-architect/vuls/models"
 	"github.com/future-architect/vuls/util"
-	apkver "github.com/knqyf263/go-apk-version"
-	debver "github.com/knqyf263/go-deb-version"
-	rpmver "github.com/knqyf263/go-rpm-version"
-	"github.com/parnurzeal/gorequest"
-	"github.com/vulsio/goval-dictionary/db"
+	ovaldb "github.com/vulsio/goval-dictionary/db"
+	ovallog "github.com/vulsio/goval-dictionary/log"
 	ovalmodels "github.com/vulsio/goval-dictionary/models"
-	"golang.org/x/xerrors"
 )
 
 type ovalResult struct {
@@ -89,6 +93,7 @@ type request struct {
 	binaryPackNames   []string
 	isSrcPack         bool
 	modularityLabel   string // RHEL 8 or later only
+	repository        string // Amazon Linux 2 Only
 }
 
 type response struct {
@@ -98,6 +103,24 @@ type response struct {
 
 // getDefsByPackNameViaHTTP fetches OVAL information via HTTP
 func getDefsByPackNameViaHTTP(r *models.ScanResult, url string) (relatedDefs ovalResult, err error) {
+	ovalFamily, err := GetFamilyInOval(r.Family)
+	if err != nil {
+		return relatedDefs, xerrors.Errorf("Failed to GetFamilyInOval. err: %w", err)
+	}
+	ovalRelease := r.Release
+	switch r.Family {
+	case constant.CentOS:
+		ovalRelease = strings.TrimPrefix(r.Release, "stream")
+	case constant.Amazon:
+		switch strings.Fields(r.Release)[0] {
+		case "2022":
+			ovalRelease = "2022"
+		case "2":
+			ovalRelease = "2"
+		default:
+			ovalRelease = "1"
+		}
+	}
 
 	nReq := len(r.Packages) + len(r.SrcPackages)
 	reqChan := make(chan request, nReq)
@@ -109,13 +132,18 @@ func getDefsByPackNameViaHTTP(r *models.ScanResult, url string) (relatedDefs ova
 
 	go func() {
 		for _, pack := range r.Packages {
-			reqChan <- request{
+			req := request{
 				packName:          pack.Name,
 				versionRelease:    pack.FormatVer(),
-				newVersionRelease: pack.FormatVer(),
+				newVersionRelease: pack.FormatNewVer(),
 				isSrcPack:         false,
 				arch:              pack.Arch,
+				repository:        pack.Repository,
 			}
+			if ovalFamily == constant.Amazon && ovalRelease == "2" && req.repository == "" {
+				req.repository = "amzn2-core"
+			}
+			reqChan <- req
 		}
 		for _, pack := range r.SrcPackages {
 			reqChan <- request{
@@ -137,8 +165,8 @@ func getDefsByPackNameViaHTTP(r *models.ScanResult, url string) (relatedDefs ova
 				url, err := util.URLPathJoin(
 					url,
 					"packs",
-					r.Family,
-					r.Release,
+					ovalFamily,
+					ovalRelease,
 					req.packName,
 				)
 				if err != nil {
@@ -157,7 +185,7 @@ func getDefsByPackNameViaHTTP(r *models.ScanResult, url string) (relatedDefs ova
 		select {
 		case res := <-resChan:
 			for _, def := range res.defs {
-				affected, notFixedYet, fixedIn, err := isOvalDefAffected(def, res.request, r.Family, r.RunningKernel, r.EnabledDnfModules)
+				affected, notFixedYet, fixedIn, err := isOvalDefAffected(def, res.request, ovalFamily, ovalRelease, r.RunningKernel, r.EnabledDnfModules)
 				if err != nil {
 					errs = append(errs, err)
 					continue
@@ -236,16 +264,40 @@ func httpGet(url string, req request, resChan chan<- response, errChan chan<- er
 	}
 }
 
-func getDefsByPackNameFromOvalDB(driver db.DB, r *models.ScanResult) (relatedDefs ovalResult, err error) {
+func getDefsByPackNameFromOvalDB(r *models.ScanResult, driver ovaldb.DB) (relatedDefs ovalResult, err error) {
+	ovalFamily, err := GetFamilyInOval(r.Family)
+	if err != nil {
+		return relatedDefs, xerrors.Errorf("Failed to GetFamilyInOval. err: %w", err)
+	}
+	ovalRelease := r.Release
+	switch r.Family {
+	case constant.CentOS:
+		ovalRelease = strings.TrimPrefix(r.Release, "stream")
+	case constant.Amazon:
+		switch strings.Fields(r.Release)[0] {
+		case "2022":
+			ovalRelease = "2022"
+		case "2":
+			ovalRelease = "2"
+		default:
+			ovalRelease = "1"
+		}
+	}
+
 	requests := []request{}
 	for _, pack := range r.Packages {
-		requests = append(requests, request{
+		req := request{
 			packName:          pack.Name,
 			versionRelease:    pack.FormatVer(),
 			newVersionRelease: pack.FormatNewVer(),
 			arch:              pack.Arch,
+			repository:        pack.Repository,
 			isSrcPack:         false,
-		})
+		}
+		if ovalFamily == constant.Amazon && ovalRelease == "2" && req.repository == "" {
+			req.repository = "amzn2-core"
+		}
+		requests = append(requests, req)
 	}
 	for _, pack := range r.SrcPackages {
 		requests = append(requests, request{
@@ -256,19 +308,13 @@ func getDefsByPackNameFromOvalDB(driver db.DB, r *models.ScanResult) (relatedDef
 			isSrcPack:       true,
 		})
 	}
-
-	ovalFamily, err := GetFamilyInOval(r.Family)
-	if err != nil {
-		return relatedDefs, err
-	}
-
 	for _, req := range requests {
-		definitions, err := driver.GetByPackName(ovalFamily, r.Release, req.packName, req.arch)
+		definitions, err := driver.GetByPackName(ovalFamily, ovalRelease, req.packName, req.arch)
 		if err != nil {
 			return relatedDefs, xerrors.Errorf("Failed to get %s OVAL info by package: %#v, err: %w", r.Family, req, err)
 		}
 		for _, def := range definitions {
-			affected, notFixedYet, fixedIn, err := isOvalDefAffected(def, req, ovalFamily, r.RunningKernel, r.EnabledDnfModules)
+			affected, notFixedYet, fixedIn, err := isOvalDefAffected(def, req, ovalFamily, ovalRelease, r.RunningKernel, r.EnabledDnfModules)
 			if err != nil {
 				return relatedDefs, xerrors.Errorf("Failed to exec isOvalAffected. err: %w", err)
 			}
@@ -298,16 +344,27 @@ func getDefsByPackNameFromOvalDB(driver db.DB, r *models.ScanResult) (relatedDef
 	return
 }
 
-func isOvalDefAffected(def ovalmodels.Definition, req request, family string, running models.Kernel, enabledMods []string) (affected, notFixedYet bool, fixedIn string, err error) {
+var modularVersionPattern = regexp.MustCompile(`.+\.module(?:\+el|_f)\d{1,2}.*`)
+
+func isOvalDefAffected(def ovalmodels.Definition, req request, family, release string, running models.Kernel, enabledMods []string) (affected, notFixedYet bool, fixedIn string, err error) {
+	if family == constant.Amazon && release == "2" {
+		if def.Advisory.AffectedRepository == "" {
+			def.Advisory.AffectedRepository = "amzn2-core"
+		}
+		if req.repository != def.Advisory.AffectedRepository {
+			return false, false, "", nil
+		}
+	}
+
 	for _, ovalPack := range def.AffectedPacks {
 		if req.packName != ovalPack.Name {
 			continue
 		}
 
 		switch family {
-		case constant.Oracle, constant.Amazon:
+		case constant.Oracle, constant.Amazon, constant.Fedora:
 			if ovalPack.Arch == "" {
-				logging.Log.Infof("Arch is needed to detect Vulns for Amazon and Oracle Linux, but empty. You need refresh OVAL maybe. oval: %#v, defID: %s", ovalPack, def.DefinitionID)
+				logging.Log.Infof("Arch is needed to detect Vulns for Amazon Linux, Oracle Linux and Fedora, but empty. You need refresh OVAL maybe. oval: %#v, defID: %s", ovalPack, def.DefinitionID)
 				continue
 			}
 		}
@@ -321,10 +378,24 @@ func isOvalDefAffected(def ovalmodels.Definition, req request, family string, ru
 			continue
 		}
 
+		// There is a modular package and a non-modular package with the same name. (e.g. fedora 35 community-mysql)
+		if ovalPack.ModularityLabel == "" && modularVersionPattern.MatchString(req.versionRelease) {
+			continue
+		} else if ovalPack.ModularityLabel != "" && !modularVersionPattern.MatchString(req.versionRelease) {
+			continue
+		}
+
 		isModularityLabelEmptyOrSame := false
 		if ovalPack.ModularityLabel != "" {
+			// expect ovalPack.ModularityLabel e.g. RedHat: nginx:1.16, Fedora: mysql:8.0:3520211031142409:f27b74a8
+			ss := strings.Split(ovalPack.ModularityLabel, ":")
+			if len(ss) < 2 {
+				logging.Log.Warnf("Invalid modularitylabel format in oval package. Maybe it is necessary to fix modularitylabel of goval-dictionary. expected: ${name}:${stream}(:${version}:${context}:${arch}), actual: %s", ovalPack.ModularityLabel)
+				continue
+			}
+			modularityNameStreamLabel := fmt.Sprintf("%s:%s", ss[0], ss[1])
 			for _, mod := range enabledMods {
-				if mod == ovalPack.ModularityLabel {
+				if mod == modularityNameStreamLabel {
 					isModularityLabelEmptyOrSame = true
 					break
 				}
@@ -338,7 +409,7 @@ func isOvalDefAffected(def ovalmodels.Definition, req request, family string, ru
 
 		if running.Release != "" {
 			switch family {
-			case constant.RedHat, constant.CentOS, constant.Alma, constant.Rocky, constant.Oracle:
+			case constant.RedHat, constant.CentOS, constant.Alma, constant.Rocky, constant.Oracle, constant.Fedora:
 				// For kernel related packages, ignore OVAL information with different major versions
 				if _, ok := kernelRelatedPackNames[ovalPack.Name]; ok {
 					if util.Major(ovalPack.Version) != util.Major(running.Release) {
@@ -368,12 +439,16 @@ func isOvalDefAffected(def ovalmodels.Definition, req request, family string, ru
 			// If the version of installed is less than in OVAL
 			switch family {
 			case constant.RedHat,
+				constant.Fedora,
 				constant.Amazon,
+				constant.Oracle,
+				constant.OpenSUSE,
+				constant.OpenSUSELeap,
 				constant.SUSEEnterpriseServer,
+				constant.SUSEEnterpriseDesktop,
 				constant.Debian,
-				constant.Ubuntu,
 				constant.Raspbian,
-				constant.Oracle:
+				constant.Ubuntu:
 				// Use fixed state in OVAL for these distros.
 				return true, false, ovalPack.Version, nil
 			}
@@ -409,28 +484,32 @@ func lessThan(family, newVer string, packInOVAL ovalmodels.Package) (bool, error
 		constant.Raspbian:
 		vera, err := debver.NewVersion(newVer)
 		if err != nil {
-			return false, err
+			return false, xerrors.Errorf("Failed to parse version. version: %s, err: %w", newVer, err)
 		}
 		verb, err := debver.NewVersion(packInOVAL.Version)
 		if err != nil {
-			return false, err
+			return false, xerrors.Errorf("Failed to parse version. version: %s, err: %w", packInOVAL.Version, err)
 		}
 		return vera.LessThan(verb), nil
 
 	case constant.Alpine:
 		vera, err := apkver.NewVersion(newVer)
 		if err != nil {
-			return false, err
+			return false, xerrors.Errorf("Failed to parse version. version: %s, err: %w", newVer, err)
 		}
 		verb, err := apkver.NewVersion(packInOVAL.Version)
 		if err != nil {
-			return false, err
+			return false, xerrors.Errorf("Failed to parse version. version: %s, err: %w", packInOVAL.Version, err)
 		}
 		return vera.LessThan(verb), nil
 
 	case constant.Oracle,
+		constant.OpenSUSE,
+		constant.OpenSUSELeap,
 		constant.SUSEEnterpriseServer,
-		constant.Amazon:
+		constant.SUSEEnterpriseDesktop,
+		constant.Amazon,
+		constant.Fedora:
 		vera := rpmver.NewVersion(newVer)
 		verb := rpmver.NewVersion(packInOVAL.Version)
 		return vera.LessThan(verb), nil
@@ -439,8 +518,8 @@ func lessThan(family, newVer string, packInOVAL ovalmodels.Package) (bool, error
 		constant.CentOS,
 		constant.Alma,
 		constant.Rocky:
-		vera := rpmver.NewVersion(rhelDownStreamOSVersionToRHEL(newVer))
-		verb := rpmver.NewVersion(rhelDownStreamOSVersionToRHEL(packInOVAL.Version))
+		vera := rpmver.NewVersion(rhelRebuildOSVersionToRHEL(newVer))
+		verb := rpmver.NewVersion(rhelRebuildOSVersionToRHEL(packInOVAL.Version))
 		return vera.LessThan(verb), nil
 
 	default:
@@ -448,40 +527,56 @@ func lessThan(family, newVer string, packInOVAL ovalmodels.Package) (bool, error
 	}
 }
 
-var rhelDownStreamOSVerPattern = regexp.MustCompile(`\.[es]l(\d+)(?:_\d+)?(?:\.(centos|rocky|alma))?`)
+var rhelRebuildOSVerPattern = regexp.MustCompile(`\.[es]l(\d+)(?:_\d+)?(?:\.(centos|rocky|alma))?`)
 
-func rhelDownStreamOSVersionToRHEL(ver string) string {
-	return rhelDownStreamOSVerPattern.ReplaceAllString(ver, ".el$1")
+func rhelRebuildOSVersionToRHEL(ver string) string {
+	return rhelRebuildOSVerPattern.ReplaceAllString(ver, ".el$1")
 }
 
 // NewOVALClient returns a client for OVAL database
-func NewOVALClient(family string, cnf config.GovalDictConf) (Client, error) {
+func NewOVALClient(family string, cnf config.GovalDictConf, o logging.LogOpts) (Client, error) {
+	if err := ovallog.SetLogger(o.LogToFile, o.LogDir, o.Debug, o.LogJSON); err != nil {
+		return nil, xerrors.Errorf("Failed to set goval-dictionary logger. err: %w", err)
+	}
+
+	driver, err := newOvalDB(&cnf)
+	if err != nil {
+		return nil, xerrors.Errorf("Failed to newOvalDB. err: %w", err)
+	}
+
 	switch family {
 	case constant.Debian, constant.Raspbian:
-		return NewDebian(&cnf), nil
+		return NewDebian(driver, cnf.GetURL()), nil
 	case constant.Ubuntu:
-		return NewUbuntu(&cnf), nil
+		return NewUbuntu(driver, cnf.GetURL()), nil
 	case constant.RedHat:
-		return NewRedhat(&cnf), nil
+		return NewRedhat(driver, cnf.GetURL()), nil
 	case constant.CentOS:
-		return NewCentOS(&cnf), nil
+		return NewCentOS(driver, cnf.GetURL()), nil
 	case constant.Alma:
-		return NewAlma(&cnf), nil
+		return NewAlma(driver, cnf.GetURL()), nil
 	case constant.Rocky:
-		return NewRocky(&cnf), nil
+		return NewRocky(driver, cnf.GetURL()), nil
 	case constant.Oracle:
-		return NewOracle(&cnf), nil
+		return NewOracle(driver, cnf.GetURL()), nil
+	case constant.OpenSUSE:
+		return NewSUSE(driver, cnf.GetURL(), constant.OpenSUSE), nil
+	case constant.OpenSUSELeap:
+		return NewSUSE(driver, cnf.GetURL(), constant.OpenSUSELeap), nil
 	case constant.SUSEEnterpriseServer:
-		// TODO other suse family
-		return NewSUSE(&cnf), nil
+		return NewSUSE(driver, cnf.GetURL(), constant.SUSEEnterpriseServer), nil
+	case constant.SUSEEnterpriseDesktop:
+		return NewSUSE(driver, cnf.GetURL(), constant.SUSEEnterpriseDesktop), nil
 	case constant.Alpine:
-		return NewAlpine(&cnf), nil
+		return NewAlpine(driver, cnf.GetURL()), nil
 	case constant.Amazon:
-		return NewAmazon(&cnf), nil
+		return NewAmazon(driver, cnf.GetURL()), nil
+	case constant.Fedora:
+		return NewFedora(driver, cnf.GetURL()), nil
 	case constant.FreeBSD, constant.Windows:
-		return nil, nil
+		return NewPseudo(family), nil
 	case constant.ServerTypePseudo:
-		return nil, nil
+		return NewPseudo(family), nil
 	default:
 		if family == "" {
 			return nil, xerrors.New("Probably an error occurred during scanning. Check the error message")
@@ -500,11 +595,18 @@ func GetFamilyInOval(familyInScanResult string) (string, error) {
 		return constant.Ubuntu, nil
 	case constant.RedHat, constant.CentOS, constant.Alma, constant.Rocky:
 		return constant.RedHat, nil
+	case constant.Fedora:
+		return constant.Fedora, nil
 	case constant.Oracle:
 		return constant.Oracle, nil
+	case constant.OpenSUSE:
+		return constant.OpenSUSE, nil
+	case constant.OpenSUSELeap:
+		return constant.OpenSUSELeap, nil
 	case constant.SUSEEnterpriseServer:
-		// TODO other suse family
 		return constant.SUSEEnterpriseServer, nil
+	case constant.SUSEEnterpriseDesktop:
+		return constant.SUSEEnterpriseDesktop, nil
 	case constant.Alpine:
 		return constant.Alpine, nil
 	case constant.Amazon:
@@ -520,4 +622,37 @@ func GetFamilyInOval(familyInScanResult string) (string, error) {
 		return "", xerrors.Errorf("OVAL for %s is not implemented yet", familyInScanResult)
 	}
 
+}
+
+// ParseCvss2 divide CVSSv2 string into score and vector
+// 5/AV:N/AC:L/Au:N/C:N/I:N/A:P
+func parseCvss2(scoreVector string) (score float64, vector string) {
+	var err error
+	ss := strings.Split(scoreVector, "/")
+	if 1 < len(ss) {
+		if score, err = strconv.ParseFloat(ss[0], 64); err != nil {
+			return 0, ""
+		}
+		return score, strings.Join(ss[1:], "/")
+	}
+	return 0, ""
+}
+
+// ParseCvss3 divide CVSSv3 string into score and vector
+// 5.6/CVSS:3.0/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:L
+func parseCvss3(scoreVector string) (score float64, vector string) {
+	var err error
+	for _, s := range []string{
+		"/CVSS:3.0/",
+		"/CVSS:3.1/",
+	} {
+		ss := strings.Split(scoreVector, s)
+		if 1 < len(ss) {
+			if score, err = strconv.ParseFloat(ss[0], 64); err != nil {
+				return 0, ""
+			}
+			return score, strings.TrimPrefix(s, "/") + ss[1]
+		}
+	}
+	return 0, ""
 }

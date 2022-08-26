@@ -86,6 +86,11 @@ func TestIsDisplayUpdatableNum(t *testing.T) {
 			family:   constant.Alpine,
 			expected: true,
 		},
+		{
+			mode:     []byte{config.Fast},
+			family:   constant.Fedora,
+			expected: true,
+		},
 	}
 
 	for i, tt := range tests {
@@ -212,11 +217,15 @@ func TestScanResult_Sort(t *testing.T) {
 							},
 						},
 						AlertDict: AlertDict{
-							En: []Alert{
+							USCERT: []Alert{
 								{Title: "a"},
 								{Title: "b"},
 							},
-							Ja: []Alert{
+							JPCERT: []Alert{
+								{Title: "a"},
+								{Title: "b"},
+							},
+							CISA: []Alert{
 								{Title: "a"},
 								{Title: "b"},
 							},
@@ -271,11 +280,15 @@ func TestScanResult_Sort(t *testing.T) {
 							},
 						},
 						AlertDict: AlertDict{
-							En: []Alert{
+							USCERT: []Alert{
 								{Title: "a"},
 								{Title: "b"},
 							},
-							Ja: []Alert{
+							JPCERT: []Alert{
+								{Title: "a"},
+								{Title: "b"},
+							},
+							CISA: []Alert{
 								{Title: "a"},
 								{Title: "b"},
 							},
@@ -333,11 +346,15 @@ func TestScanResult_Sort(t *testing.T) {
 							},
 						},
 						AlertDict: AlertDict{
-							En: []Alert{
+							USCERT: []Alert{
 								{Title: "b"},
 								{Title: "a"},
 							},
-							Ja: []Alert{
+							JPCERT: []Alert{
+								{Title: "b"},
+								{Title: "a"},
+							},
+							CISA: []Alert{
 								{Title: "b"},
 								{Title: "a"},
 							},
@@ -392,11 +409,15 @@ func TestScanResult_Sort(t *testing.T) {
 							},
 						},
 						AlertDict: AlertDict{
-							En: []Alert{
+							USCERT: []Alert{
 								{Title: "a"},
 								{Title: "b"},
 							},
-							Ja: []Alert{
+							JPCERT: []Alert{
+								{Title: "a"},
+								{Title: "b"},
+							},
+							CISA: []Alert{
 								{Title: "a"},
 								{Title: "b"},
 							},

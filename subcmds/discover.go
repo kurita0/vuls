@@ -103,6 +103,16 @@ func printConfigToml(ips []string) (err error) {
 #sqlite3Path = "/path/to/go-msfdb.sqlite3"
 #url        = ""
 
+[kevuln]
+#type = ["sqlite3", "mysql", "postgres", "redis", "http" ]
+#sqlite3Path = "/path/to/go-kev.sqlite3"
+#url        = ""
+
+[cti]
+#type = ["sqlite3", "mysql", "postgres", "redis", "http" ]
+#sqlite3Path = "/path/to/go-cti.sqlite3"
+#url        = ""
+
 # https://vuls.io/docs/en/config.toml.html#slack-section
 #[slack]
 #hookURL      = "https://hooks.slack.com/services/abc123/defghijklmnopqrstuvwxyz"
@@ -180,12 +190,12 @@ func printConfigToml(ips []string) (err error) {
 #keyPath            = "/home/username/.ssh/id_rsa"
 #scanMode           = ["fast", "fast-root", "deep", "offline"]
 #scanModules        = ["ospkg", "wordpress", "lockfile", "port"]
+#lockfiles = ["/path/to/package-lock.json"]
 #cpeNames = [
 #  "cpe:/a:rubyonrails:ruby_on_rails:4.2.1",
 #]
 #owaspDCXMLPath     = "/tmp/dependency-check-report.xml"
 #ignoreCves         = ["CVE-2014-6271"]
-#containersOnly     = false
 #containerType      = "docker" #or "lxd" or "lxc" default: docker
 #containersIncluded = ["${running}"]
 #containersExcluded = ["container_name_a"]
@@ -196,6 +206,7 @@ func printConfigToml(ips []string) (err error) {
 {{range $i, $ip := .IPs}}
 [servers.{{index $names $i}}]
 host                = "{{$ip}}"
+#ignoreIPAddresses  = ["{{$ip}}"]
 #port               = "22"
 #user               = "root"
 #sshConfigPath		= "/home/username/.ssh/config"
@@ -204,6 +215,8 @@ host                = "{{$ip}}"
 #scanModules        = ["ospkg", "wordpress", "lockfile", "port"]
 #type               = "pseudo"
 #memo               = "DB Server"
+#findLock = true
+#lockfiles = ["/path/to/package-lock.json"]
 #cpeNames           = [ "cpe:/a:rubyonrails:ruby_on_rails:4.2.1" ]
 #owaspDCXMLPath     = "/path/to/dependency-check-report.xml"
 #ignoreCves         = ["CVE-2014-0160"]

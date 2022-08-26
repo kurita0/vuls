@@ -41,6 +41,8 @@ type Config struct {
 	Gost       GostConf       `json:"gost,omitempty"`
 	Exploit    ExploitConf    `json:"exploit,omitempty"`
 	Metasploit MetasploitConf `json:"metasploit,omitempty"`
+	KEVuln     KEVulnConf     `json:"kevuln,omitempty"`
+	Cti        CtiConf        `json:"cti,omitempty"`
 
 	Slack      SlackConf      `json:"-"`
 	EMail      SMTPConf       `json:"-"`
@@ -176,6 +178,8 @@ func (c *Config) ValidateOnReport() bool {
 		&Conf.Gost,
 		&Conf.Exploit,
 		&Conf.Metasploit,
+		&Conf.KEVuln,
+		&Conf.Cti,
 	} {
 		if err := cnf.Validate(); err != nil {
 			errs = append(errs, xerrors.Errorf("Failed to validate %s: %+v", cnf.GetName(), err))
@@ -209,9 +213,11 @@ type WpScanConf struct {
 
 // ServerInfo has SSH Info, additional CPE packages to scan.
 type ServerInfo struct {
+	BaseName           string                      `toml:"-" json:"-"`
 	ServerName         string                      `toml:"-" json:"serverName,omitempty"`
 	User               string                      `toml:"user,omitempty" json:"user,omitempty"`
 	Host               string                      `toml:"host,omitempty" json:"host,omitempty"`
+	IgnoreIPAddresses  []string                    `toml:"ignoreIPAddresses,omitempty" json:"ignoreIPAddresses,omitempty"`
 	JumpServer         []string                    `toml:"jumpServer,omitempty" json:"jumpServer,omitempty"`
 	Port               string                      `toml:"port,omitempty" json:"port,omitempty"`
 	SSHConfigPath      string                      `toml:"sshConfigPath,omitempty" json:"sshConfigPath,omitempty"`
@@ -298,14 +304,24 @@ func (l Distro) String() string {
 
 // MajorVersion returns Major version
 func (l Distro) MajorVersion() (int, error) {
-	if l.Family == constant.Amazon {
-		if isAmazonLinux1(l.Release) {
-			return 1, nil
+	switch l.Family {
+	case constant.Amazon:
+		return strconv.Atoi(getAmazonLinuxVersion(l.Release))
+	case constant.CentOS:
+		if 0 < len(l.Release) {
+			return strconv.Atoi(strings.Split(strings.TrimPrefix(l.Release, "stream"), ".")[0])
 		}
-		return 2, nil
-	}
-	if 0 < len(l.Release) {
-		return strconv.Atoi(strings.Split(l.Release, ".")[0])
+	case constant.OpenSUSE:
+		if l.Release != "" {
+			if l.Release == "tumbleweed" {
+				return 0, nil
+			}
+			return strconv.Atoi(strings.Split(l.Release, ".")[0])
+		}
+	default:
+		if 0 < len(l.Release) {
+			return strconv.Atoi(strings.Split(l.Release, ".")[0])
+		}
 	}
 	return 0, xerrors.New("Release is empty")
 }

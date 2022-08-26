@@ -50,7 +50,7 @@ Vuls is a tool created to solve the problems listed above. It has the following 
 
 [Supports major Linux/FreeBSD](https://vuls.io/docs/en/supported-os.html)
 
-- Alpine, Amazon Linux, CentOS, Alma Linux, Rocky Linux, Debian, Oracle Linux, Raspbian, RHEL, SUSE Enterprise Linux, and Ubuntu
+- Alpine, Amazon Linux, CentOS, AlmaLinux, Rocky Linux, Debian, Oracle Linux, Raspbian, RHEL, openSUSE, openSUSE Leap, SUSE Enterprise Linux, Fedora, and Ubuntu
 - FreeBSD
 - Cloud, on-premise, Running Docker Container
 
@@ -82,10 +82,17 @@ Vuls is a tool created to solve the problems listed above. It has the following 
   - [Metasploit-Framework modules](https://www.rapid7.com/db/?q=&type=metasploit)
   - [qazbnm456/awesome-cve-poc](https://github.com/qazbnm456/awesome-cve-poc)
   - [nomi-sec/PoC-in-GitHub](https://github.com/nomi-sec/PoC-in-GitHub)
+  - [gmatuz/inthewilddb](https://github.com/gmatuz/inthewilddb)
 
 - CERT
   - [US-CERT](https://www.us-cert.gov/ncas/alerts)
   - [JPCERT](http://www.jpcert.or.jp/at/2019.html)
+
+- CISA(Cybersecurity & Infrastructure Security Agency)
+  - [Known Exploited Vulnerabilities Catalog](https://www.cisa.gov/known-exploited-vulnerabilities-catalog)
+
+- Cyber Threat Intelligence(MITRE ATT&CK and CAPEC)
+  - [mitre/cti](https://github.com/mitre/cti)
 
 - Libraries
   - [Node.js Security Working Group](https://github.com/nodejs/security-wg)
@@ -103,15 +110,15 @@ Vuls is a tool created to solve the problems listed above. It has the following 
 
 - Scan without root privilege, no dependencies
 - Almost no load on the scan target server
-- Offline mode scan with no internet access. (CentOS, Alma Linux, Rocky Linux, Debian, Oracle Linux, Red Hat, and Ubuntu)
+- Offline mode scan with no internet access. (CentOS, Alma Linux, Rocky Linux, Debian, Oracle Linux, Red Hat, Fedora, and Ubuntu)
 
 [Fast Root Scan](https://vuls.io/docs/en/architecture-fast-root-scan.html)
 
 - Scan with root privilege
 - Almost no load on the scan target server
-- Detect processes affected by update using yum-ps (Amazon Linux, CentOS, Alma Linux, Rocky Linux, Oracle Linux, and RedHat)
+- Detect processes affected by update using yum-ps (Amazon Linux, CentOS, Alma Linux, Rocky Linux, Oracle Linux, Fedora, and RedHat)
 - Detect processes which updated before but not restarting yet using checkrestart of debian-goodies (Debian and Ubuntu)
-- Offline mode scan with no internet access. (CentOS, Alma Linux, Rocky Linux, Debian, Oracle Linux, Red Hat, and Ubuntu)
+- Offline mode scan with no internet access. (CentOS, Alma Linux, Rocky Linux, Debian, Oracle Linux, Red Hat, Fedora, and Ubuntu)
 
 ### [Remote, Local scan mode, Server mode](https://vuls.io/docs/en/architecture-remote-local.html)
 

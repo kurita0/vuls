@@ -2,10 +2,10 @@ package scanner
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"net"
 	"os"
 	"path/filepath"
@@ -15,7 +15,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aquasecurity/fanal/analyzer"
+	dio "github.com/aquasecurity/go-dep-parser/pkg/io"
+	"github.com/aquasecurity/trivy/pkg/fanal/analyzer"
+	debver "github.com/knqyf263/go-deb-version"
 
 	"github.com/future-architect/vuls/config"
 	"github.com/future-architect/vuls/constant"
@@ -26,22 +28,25 @@ import (
 	"golang.org/x/xerrors"
 
 	// Import library scanner
-	_ "github.com/aquasecurity/fanal/analyzer/language/dotnet/nuget"
-	_ "github.com/aquasecurity/fanal/analyzer/language/golang/binary"
-	_ "github.com/aquasecurity/fanal/analyzer/language/golang/mod"
-	_ "github.com/aquasecurity/fanal/analyzer/language/java/jar"
-	_ "github.com/aquasecurity/fanal/analyzer/language/nodejs/npm"
-	_ "github.com/aquasecurity/fanal/analyzer/language/nodejs/yarn"
-	_ "github.com/aquasecurity/fanal/analyzer/language/php/composer"
-	_ "github.com/aquasecurity/fanal/analyzer/language/python/pip"
-	_ "github.com/aquasecurity/fanal/analyzer/language/python/pipenv"
-	_ "github.com/aquasecurity/fanal/analyzer/language/python/poetry"
-	_ "github.com/aquasecurity/fanal/analyzer/language/ruby/bundler"
-	_ "github.com/aquasecurity/fanal/analyzer/language/rust/cargo"
+	_ "github.com/aquasecurity/trivy/pkg/fanal/analyzer/language/dotnet/deps"
+	_ "github.com/aquasecurity/trivy/pkg/fanal/analyzer/language/dotnet/nuget"
+	_ "github.com/aquasecurity/trivy/pkg/fanal/analyzer/language/golang/binary"
+	_ "github.com/aquasecurity/trivy/pkg/fanal/analyzer/language/golang/mod"
+	_ "github.com/aquasecurity/trivy/pkg/fanal/analyzer/language/java/jar"
+	_ "github.com/aquasecurity/trivy/pkg/fanal/analyzer/language/java/pom"
+	_ "github.com/aquasecurity/trivy/pkg/fanal/analyzer/language/nodejs/npm"
+	_ "github.com/aquasecurity/trivy/pkg/fanal/analyzer/language/nodejs/pnpm"
+	_ "github.com/aquasecurity/trivy/pkg/fanal/analyzer/language/nodejs/yarn"
+	_ "github.com/aquasecurity/trivy/pkg/fanal/analyzer/language/php/composer"
+	_ "github.com/aquasecurity/trivy/pkg/fanal/analyzer/language/python/pip"
+	_ "github.com/aquasecurity/trivy/pkg/fanal/analyzer/language/python/pipenv"
+	_ "github.com/aquasecurity/trivy/pkg/fanal/analyzer/language/python/poetry"
+	_ "github.com/aquasecurity/trivy/pkg/fanal/analyzer/language/ruby/bundler"
+	_ "github.com/aquasecurity/trivy/pkg/fanal/analyzer/language/rust/cargo"
 
-	// _ "github.com/aquasecurity/fanal/analyzer/language/ruby/gemspec"
-	// _ "github.com/aquasecurity/fanal/analyzer/language/nodejs/pkg"
-	// _ "github.com/aquasecurity/fanal/analyzer/language/python/packaging"
+	// _ "github.com/aquasecurity/trivy/pkg/fanal/analyzer/language/ruby/gemspec"
+	// _ "github.com/aquasecurity/trivy/pkg/fanal/analyzer/language/nodejs/pkg"
+	// _ "github.com/aquasecurity/trivy/pkg/fanal/analyzer/language/python/packaging"
 
 	nmap "github.com/Ullaakut/nmap/v2"
 )
@@ -129,6 +134,10 @@ func (l *base) runningKernel() (release, version string, err error) {
 		ss := strings.Fields(r.Stdout)
 		if 6 < len(ss) {
 			version = ss[6]
+		}
+		if _, err := debver.NewVersion(version); err != nil {
+			l.log.Warnf("kernel running version is invalid. skip kernel vulnerability detection. actual kernel version: %s, err: %s", version, err)
+			version = ""
 		}
 	}
 	return
@@ -389,10 +398,24 @@ func (l *base) detectRunningOnAws() (ok bool, instanceID string, err error) {
 		r := l.exec(cmd, noSudo)
 		if r.isSuccess() {
 			id := strings.TrimSpace(r.Stdout)
-			if !l.isAwsInstanceID(id) {
-				return false, "", nil
+			if l.isAwsInstanceID(id) {
+				return true, id, nil
 			}
-			return true, id, nil
+		}
+
+		cmd = "curl -X PUT --max-time 1 --noproxy 169.254.169.254 -H \"X-aws-ec2-metadata-token-ttl-seconds: 300\" http://169.254.169.254/latest/api/token"
+		r = l.exec(cmd, noSudo)
+		if r.isSuccess() {
+			token := strings.TrimSpace(r.Stdout)
+			cmd = fmt.Sprintf("curl -H \"X-aws-ec2-metadata-token: %s\" --max-time 1 --noproxy 169.254.169.254 http://169.254.169.254/latest/meta-data/instance-id", token)
+			r = l.exec(cmd, noSudo)
+			if r.isSuccess() {
+				id := strings.TrimSpace(r.Stdout)
+				if !l.isAwsInstanceID(id) {
+					return false, "", nil
+				}
+				return true, id, nil
+			}
 		}
 
 		switch r.ExitStatus {
@@ -559,6 +582,12 @@ func (l *base) parseSystemctlStatus(stdout string) string {
 	return ss[1]
 }
 
+// LibFile : library file content
+type LibFile struct {
+	Contents []byte
+	Filemode os.FileMode
+}
+
 func (l *base) scanLibraries() (err error) {
 	if len(l.LibraryScanners) != 0 {
 		return nil
@@ -571,19 +600,19 @@ func (l *base) scanLibraries() (err error) {
 
 	l.log.Info("Scanning Lockfile...")
 
-	libFilemap := map[string][]byte{}
+	libFilemap := map[string]LibFile{}
 	detectFiles := l.ServerInfo.Lockfiles
 
 	// auto detect lockfile
 	if l.ServerInfo.FindLock {
 		findopt := ""
-		for filename := range models.LibraryMap {
-			findopt += fmt.Sprintf("-name %q -o ", "*"+filename)
+		for _, filename := range models.FindLockFiles {
+			findopt += fmt.Sprintf("-name %q -o ", filename)
 		}
 
 		// delete last "-o "
-		// find / -name "*package-lock.json" -o -name "*yarn.lock" ... 2>&1 | grep -v "find: "
-		cmd := fmt.Sprintf(`find / ` + findopt[:len(findopt)-3] + ` 2>&1 | grep -v "find: "`)
+		// find / -type f -and \( -name "package-lock.json" -o -name "yarn.lock" ... \) 2>&1 | grep -v "find: "
+		cmd := fmt.Sprintf(`find / -type f -and \( ` + findopt[:len(findopt)-3] + ` \) 2>&1 | grep -v "find: "`)
 		r := exec(l.ServerInfo, cmd, noSudo)
 		if r.ExitStatus != 0 && r.ExitStatus != 1 {
 			return xerrors.Errorf("Failed to find lock files")
@@ -605,26 +634,43 @@ func (l *base) scanLibraries() (err error) {
 			continue
 		}
 
-		var bytes []byte
+		var f LibFile
 		switch l.Distro.Family {
 		case constant.ServerTypePseudo:
-			bytes, err = ioutil.ReadFile(path)
+			fileinfo, err := os.Stat(path)
 			if err != nil {
-				return xerrors.Errorf("Failed to get target file. err: %w, filepath: %s", err, path)
+				return xerrors.Errorf("Failed to get target file info. err: %w, filepath: %s", err, path)
+			}
+			f.Filemode = fileinfo.Mode().Perm()
+			f.Contents, err = os.ReadFile(path)
+			if err != nil {
+				return xerrors.Errorf("Failed to read target file contents. err: %w, filepath: %s", err, path)
 			}
 		default:
-			cmd := fmt.Sprintf("cat %s", path)
+			cmd := fmt.Sprintf(`stat -c "%%a" %s`, path)
 			r := exec(l.ServerInfo, cmd, noSudo)
 			if !r.isSuccess() {
-				return xerrors.Errorf("Failed to get target file: %s, filepath: %s", r, path)
+				return xerrors.Errorf("Failed to get target file permission: %s, filepath: %s", r, path)
 			}
-			bytes = []byte(r.Stdout)
+			permStr := fmt.Sprintf("0%s", strings.ReplaceAll(r.Stdout, "\n", ""))
+			perm, err := strconv.ParseUint(permStr, 8, 32)
+			if err != nil {
+				return xerrors.Errorf("Failed to parse permission string. err: %w, permission string: %s", err, permStr)
+			}
+			f.Filemode = os.FileMode(perm)
+
+			cmd = fmt.Sprintf("cat %s", path)
+			r = exec(l.ServerInfo, cmd, noSudo)
+			if !r.isSuccess() {
+				return xerrors.Errorf("Failed to get target file contents: %s, filepath: %s", r, path)
+			}
+			f.Contents = []byte(r.Stdout)
 		}
-		libFilemap[path] = bytes
+		libFilemap[path] = f
 	}
 
 	var libraryScanners []models.LibraryScanner
-	if libraryScanners, err = AnalyzeLibraries(context.Background(), libFilemap); err != nil {
+	if libraryScanners, err = AnalyzeLibraries(context.Background(), libFilemap, l.ServerInfo.Mode.IsOffline()); err != nil {
 		return err
 	}
 	l.LibraryScanners = append(l.LibraryScanners, libraryScanners...)
@@ -632,31 +678,71 @@ func (l *base) scanLibraries() (err error) {
 }
 
 // AnalyzeLibraries : detects libs defined in lockfile
-func AnalyzeLibraries(ctx context.Context, libFilemap map[string][]byte) (libraryScanners []models.LibraryScanner, err error) {
+func AnalyzeLibraries(ctx context.Context, libFilemap map[string]LibFile, isOffline bool) (libraryScanners []models.LibraryScanner, err error) {
+	// https://github.com/aquasecurity/trivy/blob/84677903a6fa1b707a32d0e8b2bffc23dde52afa/pkg/fanal/analyzer/const.go
 	disabledAnalyzers := []analyzer.Type{
+		// ======
+		//   OS
+		// ======
+		analyzer.TypeOSRelease,
 		analyzer.TypeAlpine,
 		analyzer.TypeAmazon,
+		analyzer.TypeCBLMariner,
 		analyzer.TypeDebian,
 		analyzer.TypePhoton,
 		analyzer.TypeCentOS,
+		analyzer.TypeRocky,
+		analyzer.TypeAlma,
 		analyzer.TypeFedora,
 		analyzer.TypeOracle,
 		analyzer.TypeRedHatBase,
 		analyzer.TypeSUSE,
 		analyzer.TypeUbuntu,
+
+		// OS Package
 		analyzer.TypeApk,
 		analyzer.TypeDpkg,
+		analyzer.TypeDpkgLicense,
 		analyzer.TypeRpm,
+		analyzer.TypeRpmqa,
+
+		// OS Package Repository
+		analyzer.TypeApkRepo,
+
+		// ============
+		// Image Config
+		// ============
 		analyzer.TypeApkCommand,
+
+		// =================
+		// Structured Config
+		// =================
 		analyzer.TypeYaml,
-		analyzer.TypeTOML,
 		analyzer.TypeJSON,
 		analyzer.TypeDockerfile,
-		analyzer.TypeHCL,
-	}
-	anal := analyzer.NewAnalyzer(disabledAnalyzers)
+		analyzer.TypeTerraform,
+		analyzer.TypeCloudFormation,
+		analyzer.TypeHelm,
 
-	for path, b := range libFilemap {
+		// ========
+		// License
+		// ========
+		analyzer.TypeLicenseFile,
+
+		// ========
+		// Secrets
+		// ========
+		analyzer.TypeSecret,
+
+		// =======
+		// Red Hat
+		// =======
+		analyzer.TypeRedHatContentManifestType,
+		analyzer.TypeRedHatDockerfileType,
+	}
+	anal := analyzer.NewAnalyzerGroup(analyzer.GroupBuiltin, disabledAnalyzers)
+
+	for path, f := range libFilemap {
 		var wg sync.WaitGroup
 		result := new(analyzer.AnalysisResult)
 		if err := anal.AnalyzeFile(
@@ -666,8 +752,11 @@ func AnalyzeLibraries(ctx context.Context, libFilemap map[string][]byte) (librar
 			result,
 			"",
 			path,
-			&DummyFileInfo{},
-			func() ([]byte, error) { return b, nil }); err != nil {
+			&DummyFileInfo{size: int64(len(f.Contents)), filemode: f.Filemode},
+			func() (dio.ReadSeekCloserAt, error) { return dio.NopCloser(bytes.NewReader(f.Contents)), nil },
+			nil,
+			analyzer.AnalysisOptions{Offline: isOffline},
+		); err != nil {
 			return nil, xerrors.Errorf("Failed to get libs. err: %w", err)
 		}
 		wg.Wait()
@@ -682,16 +771,19 @@ func AnalyzeLibraries(ctx context.Context, libFilemap map[string][]byte) (librar
 }
 
 // DummyFileInfo is a dummy struct for libscan
-type DummyFileInfo struct{}
+type DummyFileInfo struct {
+	size     int64
+	filemode os.FileMode
+}
 
 // Name is
 func (d *DummyFileInfo) Name() string { return "dummy" }
 
 // Size is
-func (d *DummyFileInfo) Size() int64 { return 0 }
+func (d *DummyFileInfo) Size() int64 { return d.size }
 
 // Mode is
-func (d *DummyFileInfo) Mode() os.FileMode { return 0 }
+func (d *DummyFileInfo) Mode() os.FileMode { return d.filemode }
 
 //ModTime is
 func (d *DummyFileInfo) ModTime() time.Time { return time.Now() }
@@ -707,9 +799,10 @@ func (l *base) scanWordPress() error {
 		return nil
 	}
 	l.log.Info("Scanning WordPress...")
-	cmd := fmt.Sprintf("sudo -u %s -i -- %s cli version --allow-root",
+	cmd := fmt.Sprintf("sudo -u %s -i -- %s core version --path=%s --allow-root",
 		l.ServerInfo.WordPress.OSUser,
-		l.ServerInfo.WordPress.CmdPath)
+		l.ServerInfo.WordPress.CmdPath,
+		l.ServerInfo.WordPress.DocRoot)
 	if r := exec(l.ServerInfo, cmd, noSudo); !r.isSuccess() {
 		return xerrors.Errorf("Failed to exec `%s`. Check the OS user, command path of wp-cli, DocRoot and permission: %#v", cmd, l.ServerInfo.WordPress)
 	}
@@ -751,7 +844,7 @@ func (l *base) detectWordPress() (*models.WordPressPackages, error) {
 }
 
 func (l *base) detectWpCore() (string, error) {
-	cmd := fmt.Sprintf("sudo -u %s -i -- %s core version --path=%s --allow-root",
+	cmd := fmt.Sprintf("sudo -u %s -i -- %s core version --path=%s --allow-root 2>/dev/null",
 		l.ServerInfo.WordPress.OSUser,
 		l.ServerInfo.WordPress.CmdPath,
 		l.ServerInfo.WordPress.DocRoot)

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/d4l3k/messagediff"
+	"golang.org/x/xerrors"
 
 	"github.com/future-architect/vuls/models"
 )
@@ -202,8 +203,9 @@ var redisTrivy = []byte(`
 `)
 var redisSR = &models.ScanResult{
 	JSONVersion: 4,
-	ServerName:  "redis (debian 10.10)",
+	ServerName:  "redis:latest",
 	Family:      "debian",
+	Release:     "10.10",
 	ScannedBy:   "trivy",
 	ScannedVia:  "trivy",
 	ScannedCves: models.VulnInfos{
@@ -262,7 +264,8 @@ var redisSR = &models.ScanResult{
 		},
 	},
 	Optional: map[string]interface{}{
-		"trivy-target": "redis (debian 10.10)",
+		"TRIVY_IMAGE_NAME": "redis",
+		"TRIVY_IMAGE_TAG":  "latest",
 	},
 }
 
@@ -372,7 +375,7 @@ var strutsTrivy = []byte(`
 
 var strutsSR = &models.ScanResult{
 	JSONVersion: 4,
-	ServerName:  "library scan by trivy",
+	ServerName:  "/data/struts-1.2.7/lib",
 	Family:      "pseudo",
 	ScannedBy:   "trivy",
 	ScannedVia:  "trivy",
@@ -458,9 +461,7 @@ var strutsSR = &models.ScanResult{
 	},
 	Packages:    models.Packages{},
 	SrcPackages: models.SrcPackages{},
-	Optional: map[string]interface{}{
-		"trivy-target": "Java",
-	},
+	Optional:    nil,
 }
 
 var osAndLibTrivy = []byte(`
@@ -632,8 +633,9 @@ var osAndLibTrivy = []byte(`
 
 var osAndLibSR = &models.ScanResult{
 	JSONVersion: 4,
-	ServerName:  "quay.io/fluentd_elasticsearch/fluentd:v2.9.0 (debian 10.2)",
+	ServerName:  "quay.io/fluentd_elasticsearch/fluentd:v2.9.0",
 	Family:      "debian",
+	Release:     "10.2",
 	ScannedBy:   "trivy",
 	ScannedVia:  "trivy",
 	ScannedCves: models.VulnInfos{
@@ -720,6 +722,84 @@ var osAndLibSR = &models.ScanResult{
 		},
 	},
 	Optional: map[string]interface{}{
-		"trivy-target": "quay.io/fluentd_elasticsearch/fluentd:v2.9.0 (debian 10.2)",
+		"TRIVY_IMAGE_NAME": "quay.io/fluentd_elasticsearch/fluentd",
+		"TRIVY_IMAGE_TAG":  "v2.9.0",
 	},
 }
+
+func TestParseError(t *testing.T) {
+	cases := map[string]struct {
+		vulnJSON []byte
+		expected error
+	}{
+		"image hello-world": {
+			vulnJSON: helloWorldTrivy,
+			expected: xerrors.Errorf("scanned images or libraries are not supported by Trivy. see https://aquasecurity.github.io/trivy/dev/vulnerability/detection/os/, https://aquasecurity.github.io/trivy/dev/vulnerability/detection/language/"),
+		},
+	}
+
+	for testcase, v := range cases {
+		_, err := ParserV2{}.Parse(v.vulnJSON)
+
+		diff, equal := messagediff.PrettyDiff(
+			v.expected,
+			err,
+			messagediff.IgnoreStructField("frame"),
+		)
+		if !equal {
+			t.Errorf("test: %s, diff %s", testcase, diff)
+		}
+	}
+}
+
+var helloWorldTrivy = []byte(`
+{
+  "SchemaVersion": 2,
+  "ArtifactName": "hello-world:latest",
+  "ArtifactType": "container_image",
+  "Metadata": {
+    "ImageID": "sha256:feb5d9fea6a5e9606aa995e879d862b825965ba48de054caab5ef356dc6b3412",
+    "DiffIDs": [
+      "sha256:e07ee1baac5fae6a26f30cabfe54a36d3402f96afda318fe0a96cec4ca393359"
+    ],
+    "RepoTags": [
+      "hello-world:latest"
+    ],
+    "RepoDigests": [
+      "hello-world@sha256:97a379f4f88575512824f3b352bc03cd75e239179eea0fecc38e597b2209f49a"
+    ],
+    "ImageConfig": {
+      "architecture": "amd64",
+      "container": "8746661ca3c2f215da94e6d3f7dfdcafaff5ec0b21c9aff6af3dc379a82fbc72",
+      "created": "2021-09-23T23:47:57.442225064Z",
+      "docker_version": "20.10.7",
+      "history": [
+        {
+          "created": "2021-09-23T23:47:57Z",
+          "created_by": "/bin/sh -c #(nop) COPY file:50563a97010fd7ce1ceebd1fa4f4891ac3decdf428333fb2683696f4358af6c2 in / "
+        },
+        {
+          "created": "2021-09-23T23:47:57Z",
+          "created_by": "/bin/sh -c #(nop)  CMD [\"/hello\"]",
+          "empty_layer": true
+        }
+      ],
+      "os": "linux",
+      "rootfs": {
+        "type": "layers",
+        "diff_ids": [
+          "sha256:e07ee1baac5fae6a26f30cabfe54a36d3402f96afda318fe0a96cec4ca393359"
+        ]
+      },
+      "config": {
+        "Cmd": [
+          "/hello"
+        ],
+        "Env": [
+          "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        ],
+        "Image": "sha256:b9935d4e8431fb1a7f0989304ec86b3329a99a25f5efdc7f09f3f8c41434ca6d"
+      }
+    }
+  }
+}`)

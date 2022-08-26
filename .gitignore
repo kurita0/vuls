@@ -10,7 +10,6 @@ issues/
 vendor/
 log/
 results
-!integration/data/results
 config.toml
 !setup/docker/*
 .DS_Store
@@ -19,3 +18,5 @@ dist/
 vuls.*
 vuls
 !cmd/vuls
+future-vuls
+trivy-to-vuls

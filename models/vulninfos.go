@@ -241,7 +241,6 @@ func (ps PackageFixStatuses) Sort() {
 	sort.Slice(ps, func(i, j int) bool {
 		return ps[i].Name < ps[j].Name
 	})
-	return
 }
 
 // PackageFixStatus has name and other status about the package
@@ -257,11 +256,12 @@ type VulnInfo struct {
 	CveID                string               `json:"cveID,omitempty"`
 	Confidences          Confidences          `json:"confidences,omitempty"`
 	AffectedPackages     PackageFixStatuses   `json:"affectedPackages,omitempty"`
-	DistroAdvisories     DistroAdvisories     `json:"distroAdvisories,omitempty"` // for Amazon, RHEL, FreeBSD
+	DistroAdvisories     DistroAdvisories     `json:"distroAdvisories,omitempty"` // for Amazon, RHEL, Fedora, FreeBSD, Microsoft
 	CveContents          CveContents          `json:"cveContents,omitempty"`
 	Exploits             []Exploit            `json:"exploits,omitempty"`
 	Metasploits          []Metasploit         `json:"metasploits,omitempty"`
 	Mitigations          []Mitigation         `json:"mitigations,omitempty"`
+	Ctis                 []string             `json:"ctis,omitempty"`
 	AlertDict            AlertDict            `json:"alertDict,omitempty"`
 	CpeURIs              []string             `json:"cpeURIs,omitempty"` // CpeURIs related to this CVE defined in config.toml
 	GitHubSecurityAlerts GitHubSecurityAlerts `json:"gitHubSecurityAlerts,omitempty"`
@@ -360,7 +360,7 @@ func (v VulnInfo) CveIDDiffFormat() string {
 	if v.DiffStatus != "" {
 		return fmt.Sprintf("%s %s", v.DiffStatus, v.CveID)
 	}
-	return fmt.Sprintf("%s", v.CveID)
+	return v.CveID
 }
 
 // Titles returns title (TUI)
@@ -511,7 +511,7 @@ func (v VulnInfo) Cvss2Scores() (values []CveContentCvss) {
 
 // Cvss3Scores returns CVSS V3 Score
 func (v VulnInfo) Cvss3Scores() (values []CveContentCvss) {
-	order := []CveContentType{RedHatAPI, RedHat, Nvd, Jvn}
+	order := []CveContentType{RedHatAPI, RedHat, SUSE, Nvd, Jvn}
 	for _, ctype := range order {
 		if conts, found := v.CveContents[ctype]; found {
 			for _, cont := range conts {
@@ -550,7 +550,7 @@ func (v VulnInfo) Cvss3Scores() (values []CveContentCvss) {
 		}
 	}
 
-	// Memo: Only RedHat, Oracle and Amazon has severity data in advisory.
+	// Memo: Only RedHat, SUSE, Oracle and Amazon has severity data in advisory.
 	for _, adv := range v.DistroAdvisories {
 		if adv.Severity != "" {
 			score := severityToCvssScoreRoughly(adv.Severity)
@@ -814,18 +814,28 @@ type Mitigation struct {
 	URL            string         `json:"url,omitempty"`
 }
 
-// AlertDict has target cve JPCERT and USCERT alert data
+// AlertDict has target cve JPCERT, USCERT and CISA alert data
 type AlertDict struct {
-	Ja []Alert `json:"ja"`
-	En []Alert `json:"en"`
+	CISA   []Alert `json:"cisa"`
+	JPCERT []Alert `json:"jpcert"`
+	USCERT []Alert `json:"uscert"`
+}
+
+// IsEmpty checks if the content of AlertDict is empty
+func (a AlertDict) IsEmpty() bool {
+	return len(a.CISA) == 0 && len(a.JPCERT) == 0 && len(a.USCERT) == 0
 }
 
 // FormatSource returns which source has this alert
 func (a AlertDict) FormatSource() string {
-	if len(a.En) != 0 || len(a.Ja) != 0 {
-		return "CERT"
+	var s []string
+	if len(a.CISA) != 0 {
+		s = append(s, "CISA")
 	}
-	return ""
+	if len(a.USCERT) != 0 || len(a.JPCERT) != 0 {
+		s = append(s, "CERT")
+	}
+	return strings.Join(s, "/")
 }
 
 // Confidences is a list of Confidence
@@ -894,6 +904,9 @@ const (
 	// UbuntuAPIMatchStr :
 	UbuntuAPIMatchStr = "UbuntuAPIMatch"
 
+	// WindowsUpdateSearchStr :
+	WindowsUpdateSearchStr = "WindowsUpdateSearch"
+
 	// TrivyMatchStr :
 	TrivyMatchStr = "TrivyMatch"
 
@@ -931,6 +944,9 @@ var (
 
 	// UbuntuAPIMatch ranking how confident the CVE-ID was detected correctly
 	UbuntuAPIMatch = Confidence{100, UbuntuAPIMatchStr, 0}
+
+	// WindowsUpdateSearch ranking how confident the CVE-ID was detected correctly
+	WindowsUpdateSearch = Confidence{100, WindowsUpdateSearchStr, 0}
 
 	// TrivyMatch ranking how confident the CVE-ID was detected correctly
 	TrivyMatch = Confidence{100, TrivyMatchStr, 0}

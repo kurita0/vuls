@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aquasecurity/trivy-db/pkg/vulnsrc/vulnerability"
+	"github.com/future-architect/vuls/constant"
 )
 
 // CveContents has CveContent
@@ -321,11 +321,13 @@ func NewCveContentType(name string) CveContentType {
 		return Jvn
 	case "redhat", "centos", "alma", "rocky":
 		return RedHat
+	case "fedora":
+		return Fedora
 	case "oracle":
 		return Oracle
 	case "ubuntu":
 		return Ubuntu
-	case "debian", vulnerability.DebianOVAL:
+	case "debian", "debian-oval":
 		return Debian
 	case "redhat_api":
 		return RedHatAPI
@@ -333,6 +335,8 @@ func NewCveContentType(name string) CveContentType {
 		return DebianSecurityTracker
 	case "ubuntu_api":
 		return UbuntuAPI
+	case constant.OpenSUSE, constant.OpenSUSELeap, constant.SUSEEnterpriseServer, constant.SUSEEnterpriseDesktop:
+		return SUSE
 	case "microsoft":
 		return Microsoft
 	case "wordpress":
@@ -379,6 +383,9 @@ const (
 	// Amazon is Amazon Linux
 	Amazon CveContentType = "amazon"
 
+	// Fedora is Fedora Linux
+	Fedora CveContentType = "fedora"
+
 	// SUSE is SUSE Linux
 	SUSE CveContentType = "suse"
 
@@ -412,6 +419,7 @@ var AllCveContetTypes = CveContentTypes{
 	Ubuntu,
 	UbuntuAPI,
 	Amazon,
+	Fedora,
 	SUSE,
 	WpScan,
 	Trivy,

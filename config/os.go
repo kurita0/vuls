@@ -39,14 +39,11 @@ func (e EOL) IsExtendedSuppportEnded(now time.Time) bool {
 func GetEOL(family, release string) (eol EOL, found bool) {
 	switch family {
 	case constant.Amazon:
-		rel := "2"
-		if isAmazonLinux1(release) {
-			rel = "1"
-		}
 		eol, found = map[string]EOL{
-			"1": {StandardSupportUntil: time.Date(2023, 6, 30, 23, 59, 59, 0, time.UTC)},
-			"2": {},
-		}[rel]
+			"1":    {StandardSupportUntil: time.Date(2023, 6, 30, 23, 59, 59, 0, time.UTC)},
+			"2":    {StandardSupportUntil: time.Date(2024, 6, 30, 23, 59, 59, 0, time.UTC)},
+			"2022": {StandardSupportUntil: time.Date(2026, 6, 30, 23, 59, 59, 0, time.UTC)},
+		}[getAmazonLinuxVersion(release)]
 	case constant.RedHat:
 		// https://access.redhat.com/support/policy/updates/errata
 		eol, found = map[string]EOL{
@@ -59,29 +56,38 @@ func GetEOL(family, release string) (eol EOL, found bool) {
 			},
 			"7": {
 				StandardSupportUntil: time.Date(2024, 6, 30, 23, 59, 59, 0, time.UTC),
+				ExtendedSupportUntil: time.Date(2026, 6, 30, 23, 59, 59, 0, time.UTC),
 			},
 			"8": {
 				StandardSupportUntil: time.Date(2029, 5, 31, 23, 59, 59, 0, time.UTC),
+				ExtendedSupportUntil: time.Date(2031, 5, 31, 23, 59, 59, 0, time.UTC),
+			},
+			"9": {
+				StandardSupportUntil: time.Date(2032, 5, 31, 23, 59, 59, 0, time.UTC),
+				ExtendedSupportUntil: time.Date(2034, 5, 31, 23, 59, 59, 0, time.UTC),
 			},
 		}[major(release)]
 	case constant.CentOS:
 		// https://en.wikipedia.org/wiki/CentOS#End-of-support_schedule
-		// TODO Stream
 		eol, found = map[string]EOL{
-			"3": {Ended: true},
-			"4": {Ended: true},
-			"5": {Ended: true},
-			"6": {Ended: true},
-			"7": {StandardSupportUntil: time.Date(2024, 6, 30, 23, 59, 59, 0, time.UTC)},
-			"8": {StandardSupportUntil: time.Date(2021, 12, 31, 23, 59, 59, 0, time.UTC)},
+			"3":       {Ended: true},
+			"4":       {Ended: true},
+			"5":       {Ended: true},
+			"6":       {Ended: true},
+			"7":       {StandardSupportUntil: time.Date(2024, 6, 30, 23, 59, 59, 0, time.UTC)},
+			"8":       {StandardSupportUntil: time.Date(2021, 12, 31, 23, 59, 59, 0, time.UTC)},
+			"stream8": {StandardSupportUntil: time.Date(2024, 5, 31, 23, 59, 59, 0, time.UTC)},
+			"stream9": {StandardSupportUntil: time.Date(2027, 5, 31, 23, 59, 59, 0, time.UTC)},
 		}[major(release)]
 	case constant.Alma:
 		eol, found = map[string]EOL{
 			"8": {StandardSupportUntil: time.Date(2029, 12, 31, 23, 59, 59, 0, time.UTC)},
+			"9": {StandardSupportUntil: time.Date(2032, 5, 31, 23, 59, 59, 0, time.UTC)},
 		}[major(release)]
 	case constant.Rocky:
 		eol, found = map[string]EOL{
 			"8": {StandardSupportUntil: time.Date(2029, 5, 31, 23, 59, 59, 0, time.UTC)},
+			"9": {StandardSupportUntil: time.Date(2032, 5, 31, 23, 59, 59, 0, time.UTC)},
 		}[major(release)]
 	case constant.Oracle:
 		eol, found = map[string]EOL{
@@ -93,13 +99,19 @@ func GetEOL(family, release string) (eol EOL, found bool) {
 			"5": {Ended: true},
 			"6": {
 				StandardSupportUntil: time.Date(2021, 3, 1, 23, 59, 59, 0, time.UTC),
-				ExtendedSupportUntil: time.Date(2024, 3, 1, 23, 59, 59, 0, time.UTC),
+				ExtendedSupportUntil: time.Date(2024, 6, 1, 23, 59, 59, 0, time.UTC),
 			},
 			"7": {
 				StandardSupportUntil: time.Date(2024, 7, 1, 23, 59, 59, 0, time.UTC),
+				ExtendedSupportUntil: time.Date(2026, 6, 1, 23, 59, 59, 0, time.UTC),
 			},
 			"8": {
 				StandardSupportUntil: time.Date(2029, 7, 1, 23, 59, 59, 0, time.UTC),
+				ExtendedSupportUntil: time.Date(2031, 7, 1, 23, 59, 59, 0, time.UTC),
+			},
+			"9": {
+				StandardSupportUntil: time.Date(2032, 6, 1, 23, 59, 59, 0, time.UTC),
+				ExtendedSupportUntil: time.Date(2034, 6, 1, 23, 59, 59, 0, time.UTC),
 			},
 		}[major(release)]
 	case constant.Debian:
@@ -139,22 +151,93 @@ func GetEOL(family, release string) (eol EOL, found bool) {
 			"19.10": {Ended: true},
 			"20.04": {
 				StandardSupportUntil: time.Date(2025, 4, 1, 23, 59, 59, 0, time.UTC),
+				ExtendedSupportUntil: time.Date(2030, 4, 1, 23, 59, 59, 0, time.UTC),
 			},
 			"20.10": {
 				StandardSupportUntil: time.Date(2021, 7, 22, 23, 59, 59, 0, time.UTC),
 			},
 			"21.04": {
-				StandardSupportUntil: time.Date(2022, 1, 22, 23, 59, 59, 0, time.UTC),
+				StandardSupportUntil: time.Date(2022, 1, 20, 23, 59, 59, 0, time.UTC),
 			},
 			"21.10": {
-				StandardSupportUntil: time.Date(2022, 7, 1, 23, 59, 59, 0, time.UTC),
+				StandardSupportUntil: time.Date(2022, 7, 14, 23, 59, 59, 0, time.UTC),
+			},
+			"22.04": {
+				StandardSupportUntil: time.Date(2027, 4, 1, 23, 59, 59, 0, time.UTC),
+				ExtendedSupportUntil: time.Date(2032, 4, 1, 23, 59, 59, 0, time.UTC),
 			},
 		}[release]
+	case constant.OpenSUSE:
+		// https://en.opensuse.org/Lifetime
+		eol, found = map[string]EOL{
+			"10.2":       {Ended: true},
+			"10.3":       {Ended: true},
+			"11.0":       {Ended: true},
+			"11.1":       {Ended: true},
+			"11.2":       {Ended: true},
+			"11.3":       {Ended: true},
+			"11.4":       {Ended: true},
+			"12.1":       {Ended: true},
+			"12.2":       {Ended: true},
+			"12.3":       {Ended: true},
+			"13.1":       {Ended: true},
+			"13.2":       {Ended: true},
+			"tumbleweed": {},
+		}[release]
+	case constant.OpenSUSELeap:
+		// https://en.opensuse.org/Lifetime
+		eol, found = map[string]EOL{
+			"42.1": {Ended: true},
+			"42.2": {Ended: true},
+			"42.3": {Ended: true},
+			"15.0": {Ended: true},
+			"15.1": {Ended: true},
+			"15.2": {Ended: true},
+			"15.3": {StandardSupportUntil: time.Date(2022, 11, 30, 23, 59, 59, 0, time.UTC)},
+			"15.4": {StandardSupportUntil: time.Date(2023, 11, 30, 23, 59, 59, 0, time.UTC)},
+		}[release]
 	case constant.SUSEEnterpriseServer:
-		//TODO
+		// https://www.suse.com/lifecycle
+		eol, found = map[string]EOL{
+			"11":   {Ended: true},
+			"11.1": {Ended: true},
+			"11.2": {Ended: true},
+			"11.3": {Ended: true},
+			"11.4": {Ended: true},
+			"12":   {Ended: true},
+			"12.1": {Ended: true},
+			"12.2": {Ended: true},
+			"12.3": {Ended: true},
+			"12.4": {Ended: true},
+			"12.5": {StandardSupportUntil: time.Date(2024, 10, 31, 23, 59, 59, 0, time.UTC)},
+			"15":   {Ended: true},
+			"15.1": {Ended: true},
+			"15.2": {Ended: true},
+			"15.3": {StandardSupportUntil: time.Date(2022, 11, 30, 23, 59, 59, 0, time.UTC)},
+			"15.4": {StandardSupportUntil: time.Date(2023, 11, 30, 23, 59, 59, 0, time.UTC)},
+		}[release]
+	case constant.SUSEEnterpriseDesktop:
+		// https://www.suse.com/lifecycle
+		eol, found = map[string]EOL{
+			"11":   {Ended: true},
+			"11.1": {Ended: true},
+			"11.2": {Ended: true},
+			"11.3": {Ended: true},
+			"11.4": {Ended: true},
+			"12":   {Ended: true},
+			"12.1": {Ended: true},
+			"12.2": {Ended: true},
+			"12.3": {Ended: true},
+			"12.4": {Ended: true},
+			"15":   {Ended: true},
+			"15.1": {Ended: true},
+			"15.2": {Ended: true},
+			"15.3": {StandardSupportUntil: time.Date(2022, 11, 30, 23, 59, 59, 0, time.UTC)},
+			"15.4": {StandardSupportUntil: time.Date(2023, 11, 30, 23, 59, 59, 0, time.UTC)},
+		}[release]
 	case constant.Alpine:
 		// https://github.com/aquasecurity/trivy/blob/master/pkg/detector/ospkg/alpine/alpine.go#L19
-		// https://wiki.alpinelinux.org/wiki/Alpine_Linux:Releases
+		// https://alpinelinux.org/releases/
 		eol, found = map[string]EOL{
 			"2.0":  {Ended: true},
 			"2.1":  {Ended: true},
@@ -178,6 +261,9 @@ func GetEOL(family, release string) (eol EOL, found bool) {
 			"3.11": {StandardSupportUntil: time.Date(2021, 11, 1, 23, 59, 59, 0, time.UTC)},
 			"3.12": {StandardSupportUntil: time.Date(2022, 5, 1, 23, 59, 59, 0, time.UTC)},
 			"3.13": {StandardSupportUntil: time.Date(2022, 11, 1, 23, 59, 59, 0, time.UTC)},
+			"3.14": {StandardSupportUntil: time.Date(2023, 5, 1, 23, 59, 59, 0, time.UTC)},
+			"3.15": {StandardSupportUntil: time.Date(2023, 11, 1, 23, 59, 59, 0, time.UTC)},
+			"3.16": {StandardSupportUntil: time.Date(2024, 5, 23, 23, 59, 59, 0, time.UTC)},
 		}[majorDotMinor(release)]
 	case constant.FreeBSD:
 		// https://www.freebsd.org/security/
@@ -189,6 +275,15 @@ func GetEOL(family, release string) (eol EOL, found bool) {
 			"11": {StandardSupportUntil: time.Date(2021, 9, 30, 23, 59, 59, 0, time.UTC)},
 			"12": {StandardSupportUntil: time.Date(2024, 6, 30, 23, 59, 59, 0, time.UTC)},
 			"13": {StandardSupportUntil: time.Date(2026, 1, 31, 23, 59, 59, 0, time.UTC)},
+		}[major(release)]
+	case constant.Fedora:
+		// https://docs.fedoraproject.org/en-US/releases/eol/
+		// https://endoflife.date/fedora
+		eol, found = map[string]EOL{
+			"32": {StandardSupportUntil: time.Date(2021, 5, 25, 23, 59, 59, 0, time.UTC)},
+			"33": {StandardSupportUntil: time.Date(2021, 11, 30, 23, 59, 59, 0, time.UTC)},
+			"34": {StandardSupportUntil: time.Date(2022, 5, 17, 23, 59, 59, 0, time.UTC)},
+			"35": {StandardSupportUntil: time.Date(2022, 12, 7, 23, 59, 59, 0, time.UTC)},
 		}[major(release)]
 	}
 	return
@@ -206,6 +301,10 @@ func majorDotMinor(osVer string) (majorDotMinor string) {
 	return fmt.Sprintf("%s.%s", ss[0], ss[1])
 }
 
-func isAmazonLinux1(osRelease string) bool {
-	return len(strings.Fields(osRelease)) == 1
+func getAmazonLinuxVersion(osRelease string) string {
+	ss := strings.Fields(osRelease)
+	if len(ss) == 1 {
+		return "1"
+	}
+	return ss[0]
 }

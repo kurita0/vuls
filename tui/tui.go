@@ -9,9 +9,11 @@ import (
 	"text/template"
 	"time"
 
+	"golang.org/x/exp/slices"
 	"golang.org/x/xerrors"
 
 	"github.com/future-architect/vuls/config"
+	"github.com/future-architect/vuls/cti"
 	"github.com/future-architect/vuls/logging"
 	"github.com/future-architect/vuls/models"
 	"github.com/future-architect/vuls/util"
@@ -636,7 +638,7 @@ func summaryLines(r models.ScanResult) string {
 			cvssScore + " |",
 			fmt.Sprintf("%-6s |", av),
 			fmt.Sprintf("%3s |", exploits),
-			fmt.Sprintf("%6s |", vinfo.AlertDict.FormatSource()),
+			fmt.Sprintf("%9s |", vinfo.AlertDict.FormatSource()),
 			fmt.Sprintf("%7s |", vinfo.PatchStatus(r.Packages)),
 			strings.Join(pkgNames, ", "),
 		}
@@ -719,8 +721,7 @@ func setChangelogLayout(g *gocui.Gui) error {
 				if len(pack.AffectedProcs) != 0 {
 					for _, p := range pack.AffectedProcs {
 						if len(p.ListenPortStats) == 0 {
-							lines = append(lines, fmt.Sprintf("  * PID: %s %s Port: []",
-								p.PID, p.Name))
+							lines = append(lines, fmt.Sprintf("  * PID: %s %s", p.PID, p.Name))
 							continue
 						}
 
@@ -733,8 +734,7 @@ func setChangelogLayout(g *gocui.Gui) error {
 							}
 						}
 
-						lines = append(lines, fmt.Sprintf("  * PID: %s %s Port: %s",
-							p.PID, p.Name, ports))
+						lines = append(lines, fmt.Sprintf("  * PID: %s %s Port: %s", p.PID, p.Name, ports))
 					}
 				}
 			}
@@ -783,13 +783,18 @@ func setChangelogLayout(g *gocui.Gui) error {
 			lines = append(lines, adv.Format())
 		}
 
+		m := map[string]struct{}{}
 		if len(vinfo.Exploits) != 0 {
 			lines = append(lines, "\n",
-				"Exploit Codes",
+				"PoC",
 				"=============",
 			)
 			for _, exploit := range vinfo.Exploits {
+				if _, ok := m[exploit.URL]; ok {
+					continue
+				}
 				lines = append(lines, fmt.Sprintf("* [%s](%s)", exploit.Description, exploit.URL))
+				m[exploit.URL] = struct{}{}
 			}
 		}
 
@@ -808,28 +813,64 @@ func setChangelogLayout(g *gocui.Gui) error {
 			}
 		}
 
-		if len(vinfo.AlertDict.En) > 0 {
+		if len(vinfo.AlertDict.CISA) > 0 {
 			lines = append(lines, "\n",
-				"USCERT Alert",
-				"=============",
+				"CISA Alert",
+				"===========",
 			)
-			for _, alert := range vinfo.AlertDict.En {
+			for _, alert := range vinfo.AlertDict.CISA {
 				lines = append(lines, fmt.Sprintf("* [%s](%s)", alert.Title, alert.URL))
 			}
 		}
 
-		if len(vinfo.AlertDict.Ja) > 0 {
+		if len(vinfo.AlertDict.USCERT) > 0 {
+			lines = append(lines, "\n",
+				"USCERT Alert",
+				"=============",
+			)
+			for _, alert := range vinfo.AlertDict.USCERT {
+				lines = append(lines, fmt.Sprintf("* [%s](%s)", alert.Title, alert.URL))
+			}
+		}
+
+		if len(vinfo.AlertDict.JPCERT) > 0 {
 			lines = append(lines, "\n",
 				"JPCERT Alert",
 				"=============",
 			)
-			for _, alert := range vinfo.AlertDict.Ja {
+			for _, alert := range vinfo.AlertDict.JPCERT {
 				if r.Lang == "ja" {
 					lines = append(lines, fmt.Sprintf("* [%s](%s)", alert.Title, alert.URL))
 				} else {
 					lines = append(lines, fmt.Sprintf("* [JPCERT](%s)", alert.URL))
 				}
 			}
+		}
+
+		if len(vinfo.Ctis) > 0 {
+			lines = append(lines, "\n",
+				"Cyber Threat Intelligence",
+				"=========================",
+			)
+
+			attacks := []string{}
+			capecs := []string{}
+			for _, techniqueID := range vinfo.Ctis {
+				technique, ok := cti.TechniqueDict[techniqueID]
+				if !ok {
+					continue
+				}
+				if strings.HasPrefix(techniqueID, "CAPEC-") {
+					capecs = append(capecs, fmt.Sprintf("* %s", technique.Name))
+				} else {
+					attacks = append(attacks, fmt.Sprintf("* %s", technique.Name))
+				}
+			}
+			slices.Sort(attacks)
+			slices.Sort(capecs)
+			lines = append(lines, append([]string{"MITRE ATT&CK:"}, attacks...)...)
+			lines = append(lines, "\n")
+			lines = append(lines, append([]string{"CAPEC:"}, capecs...)...)
 		}
 
 		if currentScanResult.Config.Scan.Servers[currentScanResult.ServerName].Mode.IsDeep() {

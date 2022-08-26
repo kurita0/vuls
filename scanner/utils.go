@@ -16,7 +16,7 @@ import (
 
 func isRunningKernel(pack models.Package, family string, kernel models.Kernel) (isKernel, running bool) {
 	switch family {
-	case constant.SUSEEnterpriseServer:
+	case constant.OpenSUSE, constant.OpenSUSELeap, constant.SUSEEnterpriseServer, constant.SUSEEnterpriseDesktop:
 		if pack.Name == "kernel-default" {
 			// Remove the last period and later because uname don't show that.
 			ss := strings.Split(pack.Release, ".")
@@ -26,7 +26,7 @@ func isRunningKernel(pack models.Package, family string, kernel models.Kernel) (
 		}
 		return false, false
 
-	case constant.RedHat, constant.Oracle, constant.CentOS, constant.Alma, constant.Rocky, constant.Amazon:
+	case constant.RedHat, constant.Oracle, constant.CentOS, constant.Alma, constant.Rocky, constant.Amazon, constant.Fedora:
 		switch pack.Name {
 		case "kernel", "kernel-devel", "kernel-core", "kernel-modules", "kernel-uek":
 			ver := fmt.Sprintf("%s-%s.%s", pack.Version, pack.Release, pack.Arch)

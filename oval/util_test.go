@@ -199,11 +199,12 @@ func TestDefpacksToPackStatuses(t *testing.T) {
 
 func TestIsOvalDefAffected(t *testing.T) {
 	type in struct {
-		def    ovalmodels.Definition
-		req    request
-		family string
-		kernel models.Kernel
-		mods   []string
+		def     ovalmodels.Definition
+		req     request
+		family  string
+		release string
+		kernel  models.Kernel
+		mods    []string
 	}
 	var tests = []struct {
 		in          in
@@ -1621,6 +1622,88 @@ func TestIsOvalDefAffected(t *testing.T) {
 			affected:    false,
 			notFixedYet: false,
 		},
+		// dnf module 4 (long modularitylabel)
+		{
+			in: in{
+				family: constant.Fedora,
+				def: ovalmodels.Definition{
+					AffectedPacks: []ovalmodels.Package{
+						{
+							Name:            "community-mysql",
+							Version:         "0:8.0.27-1.module_f35+13269+c9322734",
+							Arch:            "x86_64",
+							NotFixedYet:     false,
+							ModularityLabel: "mysql:8.0:3520211031142409:f27b74a8",
+						},
+					},
+				},
+				req: request{
+					packName:       "community-mysql",
+					arch:           "x86_64",
+					versionRelease: "8.0.26-1.module_f35+12627+b26747dd",
+				},
+				mods: []string{
+					"mysql:8.0",
+				},
+			},
+			affected:    true,
+			notFixedYet: false,
+			fixedIn:     "0:8.0.27-1.module_f35+13269+c9322734",
+		},
+		// dnf module 5 (req is non-modular package, oval is modular package)
+		{
+			in: in{
+				family: constant.Fedora,
+				def: ovalmodels.Definition{
+					AffectedPacks: []ovalmodels.Package{
+						{
+							Name:            "community-mysql",
+							Version:         "0:8.0.27-1.module_f35+13269+c9322734",
+							Arch:            "x86_64",
+							NotFixedYet:     false,
+							ModularityLabel: "mysql:8.0:3520211031142409:f27b74a8",
+						},
+					},
+				},
+				req: request{
+					packName:       "community-mysql",
+					arch:           "x86_64",
+					versionRelease: "8.0.26-1.fc35",
+				},
+				mods: []string{
+					"mysql:8.0",
+				},
+			},
+			affected:    false,
+			notFixedYet: false,
+		},
+		// dnf module 6 (req is modular package, oval is non-modular package)
+		{
+			in: in{
+				family: constant.Fedora,
+				def: ovalmodels.Definition{
+					AffectedPacks: []ovalmodels.Package{
+						{
+							Name:            "community-mysql",
+							Version:         "0:8.0.27-1.fc35",
+							Arch:            "x86_64",
+							NotFixedYet:     false,
+							ModularityLabel: "",
+						},
+					},
+				},
+				req: request{
+					packName:       "community-mysql",
+					arch:           "x86_64",
+					versionRelease: "8.0.26-1.module_f35+12627+b26747dd",
+				},
+				mods: []string{
+					"mysql:8.0",
+				},
+			},
+			affected:    false,
+			notFixedYet: false,
+		},
 		// .ksplice1.
 		{
 			in: in{
@@ -1774,10 +1857,63 @@ func TestIsOvalDefAffected(t *testing.T) {
 			wantErr: false,
 			fixedIn: "",
 		},
+		// amazon linux 2 repository
+		{
+			in: in{
+				family:  constant.Amazon,
+				release: "2",
+				def: ovalmodels.Definition{
+					Advisory: ovalmodels.Advisory{
+						AffectedRepository: "amzn2-core",
+					},
+					AffectedPacks: []ovalmodels.Package{
+						{
+							Name:    "nginx",
+							Version: "2.17-106.0.1",
+							Arch:    "x86_64",
+						},
+					},
+				},
+				req: request{
+					packName:       "nginx",
+					versionRelease: "2.17-105.0.1",
+					arch:           "x86_64",
+					repository:     "amzn2-core",
+				},
+			},
+			affected: true,
+			fixedIn:  "2.17-106.0.1",
+		},
+		{
+			in: in{
+				family:  constant.Amazon,
+				release: "2",
+				def: ovalmodels.Definition{
+					Advisory: ovalmodels.Advisory{
+						AffectedRepository: "amzn2-core",
+					},
+					AffectedPacks: []ovalmodels.Package{
+						{
+							Name:    "nginx",
+							Version: "2.17-106.0.1",
+							Arch:    "x86_64",
+						},
+					},
+				},
+				req: request{
+					packName:       "nginx",
+					versionRelease: "2.17-105.0.1",
+					arch:           "x86_64",
+					repository:     "amzn2extra-nginx",
+				},
+			},
+			affected: false,
+			fixedIn:  "",
+		},
 	}
 
 	for i, tt := range tests {
-		affected, notFixedYet, fixedIn, err := isOvalDefAffected(tt.in.def, tt.in.req, tt.in.family, tt.in.kernel, tt.in.mods)
+		affected, notFixedYet, fixedIn, err := isOvalDefAffected(tt.in.def, tt.in.req, tt.in.family, tt.in.release, tt.in.kernel, tt.in.mods)
 		if tt.wantErr != (err != nil) {
 			t.Errorf("[%d] err\nexpected: %t\n  actual: %s\n", i, tt.wantErr, err)
 		}
@@ -1833,8 +1969,8 @@ func Test_rhelDownStreamOSVersionToRHEL(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := rhelDownStreamOSVersionToRHEL(tt.args.ver); got != tt.want {
-				t.Errorf("rhelDownStreamOSVersionToRHEL() = %v, want %v", got, tt.want)
+			if got := rhelRebuildOSVersionToRHEL(tt.args.ver); got != tt.want {
+				t.Errorf("rhelRebuildOSVersionToRHEL() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -1965,5 +2101,78 @@ func Test_ovalResult_Sort(t *testing.T) {
 				t.Errorf("act %#v, want %#v", o.entries, tt.want.entries)
 			}
 		})
+	}
+}
+
+func TestParseCvss2(t *testing.T) {
+	type out struct {
+		score  float64
+		vector string
+	}
+	var tests = []struct {
+		in  string
+		out out
+	}{
+		{
+			in: "5/AV:N/AC:L/Au:N/C:N/I:N/A:P",
+			out: out{
+				score:  5.0,
+				vector: "AV:N/AC:L/Au:N/C:N/I:N/A:P",
+			},
+		},
+		{
+			in: "",
+			out: out{
+				score:  0,
+				vector: "",
+			},
+		},
+	}
+	for _, tt := range tests {
+		s, v := parseCvss2(tt.in)
+		if s != tt.out.score || v != tt.out.vector {
+			t.Errorf("\nexpected: %f, %s\n  actual: %f, %s",
+				tt.out.score, tt.out.vector, s, v)
+		}
+	}
+}
+
+func TestParseCvss3(t *testing.T) {
+	type out struct {
+		score  float64
+		vector string
+	}
+	var tests = []struct {
+		in  string
+		out out
+	}{
+		{
+			in: "5.6/CVSS:3.0/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:L",
+			out: out{
+				score:  5.6,
+				vector: "CVSS:3.0/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:L",
+			},
+		},
+		{
+			in: "6.1/CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:L",
+			out: out{
+				score:  6.1,
+				vector: "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:L",
+			},
+		},
+		{
+			in: "",
+			out: out{
+				score:  0,
+				vector: "",
+			},
+		},
+	}
+	for _, tt := range tests {
+		s, v := parseCvss3(tt.in)
+		if s != tt.out.score || v != tt.out.vector {
+			t.Errorf("\nexpected: %f, %s\n  actual: %f, %s",
+				tt.out.score, tt.out.vector, s, v)
+		}
 	}
 }
